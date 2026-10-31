@@ -7,6 +7,8 @@ using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using EFT;
 using EFT.InventoryLogic;
+using EFT.InventoryLogic.Operations;
+using EFT.Quests;
 using EFT.UI;
 using HarmonyLib;
 using SPT.Reflection.Patching;
@@ -17,14 +19,18 @@ namespace SkillEffectsExtended;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInDependency(SkillsExtendedGuid, BepInDependency.DependencyFlags.SoftDependency)]
+[BepInDependency(ContinuousLoadAmmoGuid, BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class Plugin : BaseUnityPlugin
 {
     private const string PluginGuid = "com.musicmaniac.skilleffectsextended";
     private const string PluginName = "Skill Effects Extended";
-    private const string PluginVersion = "1.0.0";
+    private const string PluginVersion = "1.1.0";
     private const string SkillsExtendedGuid = "com.cj.skillsextended";
+    private const string ContinuousLoadAmmoGuid = "com.ozen.continuousloadammo";
 
     internal static bool SkillsExtendedAvailable { get; private set; }
+    internal static bool ContinuousLoadAmmoAvailable { get; private set; }
+    internal static ConfigEntry<float>? ContinuousLoadAmmoMovementPercentPerLevel { get; private set; }
     internal static ConfigEntry<float> MagazineErgonomicsPercentPerLevel = null!;
     internal static ConfigEntry<float> MagazineRecoilPercentPerLevel = null!;
     internal static ConfigEntry<float> SuppressorErgonomicsPercentPerLevel = null!;
@@ -35,10 +41,23 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<float> BackpackMovementPercentPerLevel = null!;
     internal static ConfigEntry<float> BackpackTurnPercentPerLevel = null!;
     internal static ConfigEntry<float> BackpackErgonomicsPercentPerLevel = null!;
+    internal static ConfigEntry<float> ObjectivePlantTimePercentPerLevel = null!;
+    internal static ConfigEntry<float> VehicleExtractionTimePercentPerLevel = null!;
+    internal static ConfigEntry<bool> LogObjectivePlantTimer = null!;
+
+    private static Plugin? Instance { get; set; }
 
     private void Awake()
     {
+        Instance = this;
         SkillsExtendedAvailable = Chainloader.PluginInfos.ContainsKey(SkillsExtendedGuid);
+        ContinuousLoadAmmoAvailable = Chainloader.PluginInfos.ContainsKey(ContinuousLoadAmmoGuid);
+        if (ContinuousLoadAmmoAvailable)
+        {
+            ContinuousLoadAmmoMovementPercentPerLevel = BindReduction(
+                "Mag Drills - Continuous Load Ammo Movement Speed", "BonusPercentPerLevel", 1f,
+                "Movement speed percentage points added per Mag Drills level while loading magazines. Final speed is capped at 100%.");
+        }
 
         MagazineErgonomicsPercentPerLevel = BindReduction(
             "Mag Drills - Magazine Ergonomics", "ReductionPercentPerLevel", 1f,
@@ -70,6 +89,15 @@ public sealed class Plugin : BaseUnityPlugin
         BackpackErgonomicsPercentPerLevel = BindReduction(
             "Strength - Backpack Ergonomics", "ReductionPercentPerLevel", 1f,
             "Percentage of a backpack's negative ergonomics penalty removed per Strength level.");
+        ObjectivePlantTimePercentPerLevel = BindReduction(
+            "Attention - Objective Planting Time", "ReductionPercentPerLevel", 1f,
+            "Percentage of objective item setup time removed per Attention level.");
+        VehicleExtractionTimePercentPerLevel = BindReduction(
+            "Charisma - Vehicle Extraction Time", "ReductionPercentPerLevel", 1f,
+            "Percentage of paid vehicle extraction time removed per Charisma level.");
+        LogObjectivePlantTimer = Config.Bind(
+            "Debug", "LogObjectivePlantTimer", true,
+            "Log the plant timer, Attention level, and reduction when a quest plant begins.");
 
         new ModErgonomicsPatch().Enable();
         new ArmorComponentErgonomicsPatch().Enable();
@@ -78,6 +106,14 @@ public sealed class Plugin : BaseUnityPlugin
         new BackpackMovementPenaltyPatch().Enable();
         new BackpackTurnPenaltyPatch().Enable();
         new BackpackErgonomicsPenaltyPatch().Enable();
+        new ObjectivePlantTimePatch().Enable();
+        new ObjectivePlantActionTimePatch().Enable();
+        new VehicleExtractionTimePatch().Enable();
+        if (ContinuousLoadAmmoAvailable)
+        {
+            TryEnableUiPatch(new ContinuousLoadAmmoStartPatch());
+            TryEnableUiPatch(new ContinuousAmmoMovementSpeedPatch());
+        }
         TryEnableUiPatch(new BuffDescriptionPatch());
         TryEnableUiPatch(new SkillTooltipBuffsPatch());
         TryEnableUiPatch(new SkillPanelBuffsPatch());
@@ -87,13 +123,16 @@ public sealed class Plugin : BaseUnityPlugin
             $"Mag Drills magazine ergonomics {MagazineErgonomicsPercentPerLevel.Value:0.##}%/level; " +
             $"magazine recoil {MagazineRecoilPercentPerLevel.Value:0.##}%/level; " +
             $"Silent Ops suppressor ergonomics {SuppressorErgonomicsPercentPerLevel.Value:0.##}%/level; " +
+            $"Continuous Load Ammo: {(ContinuousLoadAmmoAvailable ? "detected, Mag Drills loading movement bonus active" : "not detected")}; " +
             $"Aim Drills sight/headgear ergonomics " +
             $"{SightErgonomicsPercentPerLevel.Value:0.##}%/{HeadgearErgonomicsPercentPerLevel.Value:0.##}% per level; " +
             $"light/heavy armor ergonomics " +
             $"{LightArmorErgonomicsPercentPerLevel.Value:0.##}%/{HeavyArmorErgonomicsPercentPerLevel.Value:0.##}% per level; " +
             $"backpack movement/turn/ergonomics reductions " +
             $"{BackpackMovementPercentPerLevel.Value:0.##}%/{BackpackTurnPercentPerLevel.Value:0.##}%/" +
-            $"{BackpackErgonomicsPercentPerLevel.Value:0.##}% per level.");
+            $"{BackpackErgonomicsPercentPerLevel.Value:0.##}% per level; objective planting time " +
+            $"{ObjectivePlantTimePercentPerLevel.Value:0.##}% per Attention level; vehicle extraction time " +
+            $"{VehicleExtractionTimePercentPerLevel.Value:0.##}% per Charisma level.");
     }
 
     private ConfigEntry<float> BindReduction(string section, string key, float defaultValue, string description) =>
@@ -118,6 +157,34 @@ public sealed class Plugin : BaseUnityPlugin
     internal static float GetMagazineRecoilReductionPercent(int level) =>
         GetReductionPercent(level, MagazineRecoilPercentPerLevel.Value);
 
+    internal static float GetContinuousLoadAmmoMovementBonusPercent(int level)
+    {
+        if (!ContinuousLoadAmmoAvailable)
+        {
+            return 0f;
+        }
+
+        float baseSpeedLimit = 0.45f;
+        try
+        {
+            Type? continuousLoadAmmoType = AccessTools.TypeByName("ContinuousLoadAmmo.ContinuousLoadAmmo");
+            object? speedLimitEntry = AccessTools.Property(continuousLoadAmmoType, "SpeedLimit")?.GetValue(null);
+            if (speedLimitEntry is ConfigEntry<float> configEntry)
+            {
+                baseSpeedLimit = configEntry.Value;
+            }
+        }
+        catch (Exception exception)
+        {
+            Instance?.Logger.LogDebug($"Could not read Continuous Load Ammo speed limit; using its 45% default. {exception.Message}");
+        }
+
+        baseSpeedLimit = Math.Max(0f, Math.Min(1f, baseSpeedLimit));
+        float bonusPerLevel = ContinuousLoadAmmoMovementPercentPerLevel?.Value ?? 1f;
+        float addedSpeed = Math.Max(0, level) * bonusPerLevel / 100f;
+        return Math.Max(0f, Math.Min(1f, baseSpeedLimit + addedSpeed) - baseSpeedLimit) * 100f;
+    }
+
     internal static float GetSuppressorErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, SuppressorErgonomicsPercentPerLevel.Value);
 
@@ -141,6 +208,20 @@ public sealed class Plugin : BaseUnityPlugin
 
     internal static float GetBackpackErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, BackpackErgonomicsPercentPerLevel.Value);
+
+    internal static float GetObjectivePlantTimeReductionPercent(int level) =>
+        GetReductionPercent(level, ObjectivePlantTimePercentPerLevel.Value);
+
+    internal static float GetVehicleExtractionTimeReductionPercent(int level) =>
+        GetReductionPercent(level, VehicleExtractionTimePercentPerLevel.Value);
+
+    internal static void LogPlantTimerDebug(string message)
+    {
+        if (LogObjectivePlantTimer.Value)
+        {
+            Instance?.Logger.LogInfo($"Objective plant timer: {message}");
+        }
+    }
 
     internal static bool TryGetSilentOps(SkillManager skills, out Skill silentOps)
     {
@@ -397,7 +478,7 @@ internal sealed class ArmorPenaltyItemDisplayPatch : ModulePatch
             new[] { typeof(Item), typeof(IEquipmentPenaltyComponentTemplate), typeof(bool) });
 
     [PatchPostfix]
-    private static void Postfix(EquipmentPenaltyComponent __instance, object[] __args)
+    private static void Postfix(object[] __args)
     {
         if (__args.Length < 2 || __args[0] is not Item item ||
             __args[1] is not IEquipmentPenaltyComponentTemplate template)
@@ -497,6 +578,155 @@ internal sealed class BackpackErgonomicsPenaltyPatch : ModulePatch
     }
 }
 
+internal sealed class ObjectivePlantTimePatch : ModulePatch
+{
+    protected override MethodBase GetTargetMethod() =>
+        AccessTools.Constructor(typeof(SetupItemOperation), new[]
+        {
+            typeof(ushort),
+            typeof(ItemController),
+            typeof(DiscardResult),
+            typeof(string),
+            typeof(Vector3),
+            typeof(Quaternion),
+            typeof(IPlayer),
+            typeof(float)
+        });
+
+    [PatchPrefix]
+    private static void Prefix([HarmonyArgument("setupTime")] ref float setupTime)
+    {
+        if (setupTime <= 0f)
+        {
+            return;
+        }
+
+        SkillManager? skills = ClientAppUtils.GetClientApp()?.Session?.Profile?.Skills;
+        if (skills is null)
+        {
+            return;
+        }
+
+        float reductionPercent = Plugin.GetObjectivePlantTimeReductionPercent(skills.Attention.Level);
+        setupTime *= 1f - reductionPercent / 100f;
+    }
+}
+
+internal sealed class ObjectivePlantActionTimePatch : ModulePatch
+{
+    private sealed class OriginalPlantTime
+    {
+        internal OriginalPlantTime(float value) => Value = value;
+        internal float Value { get; }
+    }
+
+    private static readonly ConditionalWeakTable<ConditionLeaveItemAtLocation, OriginalPlantTime>
+        OriginalPlantTimes = new();
+    private static readonly Type? PlacementActionType =
+        AccessTools.Inner(typeof(InteractionContextHelper), "CG_GetAvailableActions3");
+    private static readonly FieldInfo? PlacementContextField =
+        PlacementActionType is null ? null : AccessTools.Field(PlacementActionType, "CG_GetAvailableActions5");
+    private static readonly FieldInfo? LeaveItemConditionField =
+        PlacementContextField is null ? null : AccessTools.Field(PlacementContextField.FieldType, "resultLeaveItem");
+    private static readonly FieldInfo? PlantTimeField =
+        AccessTools.Field(typeof(ConditionLeaveItemAtLocation), "plantTime");
+
+    protected override MethodBase GetTargetMethod() =>
+        AccessTools.Method(PlacementActionType, "method_0")
+        ?? throw new MissingMethodException("Could not find the quest item placement action callback.");
+
+    [PatchPrefix]
+    private static void Prefix(object __instance)
+    {
+        object? placementContext = PlacementContextField?.GetValue(__instance);
+        object? conditionObject = placementContext is null ? null : LeaveItemConditionField?.GetValue(placementContext);
+        if (conditionObject is not ConditionLeaveItemAtLocation condition || PlantTimeField is null)
+        {
+            Plugin.LogPlantTimerDebug("Quest item placement callback ran, but its leave-item condition could not be resolved.");
+            return;
+        }
+
+        float currentTime = (float)PlantTimeField.GetValue(condition)!;
+        float originalTime = OriginalPlantTimes.GetValue(condition, _ => new OriginalPlantTime(currentTime)).Value;
+        if (originalTime <= 0f)
+        {
+            Plugin.LogPlantTimerDebug($"Quest item placement condition has non-positive plantTime={originalTime:0.##}.");
+            return;
+        }
+
+        SkillManager? skills = ClientAppUtils.GetClientApp()?.Session?.Profile?.Skills;
+        if (skills is null)
+        {
+            Plugin.LogPlantTimerDebug("Quest item placement callback ran, but Attention was unavailable.");
+            return;
+        }
+
+        int attentionLevel = skills.Attention.Level;
+        float reductionPercent = Plugin.GetObjectivePlantTimeReductionPercent(attentionLevel);
+        float reducedTime = originalTime * (1f - reductionPercent / 100f);
+        PlantTimeField.SetValue(condition, reducedTime);
+        Plugin.LogPlantTimerDebug(
+            $"Leave-item placement callback: {originalTime:0.##}s -> {reducedTime:0.##}s; " +
+            $"Attention level {attentionLevel}, reduction {reductionPercent:0.##}%.");
+    }
+}
+
+internal sealed class VehicleExtractionTimePatch : ModulePatch
+{
+    private static readonly ConditionalWeakTable<EFT.Interactive.ExfiltrationPoint, OriginalExtractionTime>
+        OriginalTimes = new();
+
+    protected override MethodBase GetTargetMethod() =>
+        AccessTools.Method(typeof(EFT.Interactive.ExfiltrationPoint), nameof(EFT.Interactive.ExfiltrationPoint.Proceed));
+
+    [PatchPrefix]
+    private static void Prefix(EFT.Interactive.ExfiltrationPoint __instance, Player player)
+    {
+        EFT.Interactive.ExitTriggerSettings? settings = __instance.Settings;
+        if (settings is null || !IsPaidVehicleExtraction(__instance))
+        {
+            return;
+        }
+
+        SkillManager? skills = player?.Profile?.Skills;
+        if (skills is null)
+        {
+            return;
+        }
+
+        OriginalExtractionTime original = OriginalTimes.GetValue(
+            __instance, point => new OriginalExtractionTime(point.Settings.ExfiltrationTime));
+        float reductionPercent = Plugin.GetVehicleExtractionTimeReductionPercent(skills.Charisma.Level);
+        settings.ExfiltrationTime = original.Seconds * (1f - reductionPercent / 100f);
+    }
+
+    private static bool IsPaidVehicleExtraction(EFT.Interactive.ExfiltrationPoint point)
+    {
+        if (point.Settings?.ExfiltrationType != EFT.Interactive.EExfiltrationType.SharedTimer ||
+            point.Requirements is null)
+        {
+            return false;
+        }
+
+        foreach (EFT.Interactive.ExfiltrationRequirement requirement in point.Requirements)
+        {
+            if (requirement is EFT.Interactive.TransferItemRequirement)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private sealed class OriginalExtractionTime
+    {
+        internal OriginalExtractionTime(float seconds) => Seconds = seconds;
+
+        internal float Seconds { get; }
+    }
+}
+
 internal sealed class MagazineRecoilPatch : ModulePatch
 {
     protected override MethodBase GetTargetMethod() =>
@@ -521,6 +751,76 @@ internal sealed class MagazineRecoilPatch : ModulePatch
     }
 }
 
+internal sealed class ContinuousLoadAmmoStartPatch : ModulePatch
+{
+    private const string ControllerTypeName = "ContinuousLoadAmmo.Controllers.LoadAmmoController";
+    private static readonly Type? ControllerType = AccessTools.TypeByName(ControllerTypeName);
+    private static readonly FieldInfo? PlayerField =
+        ControllerType is null ? null : AccessTools.Field(ControllerType, "_player");
+    private static MovementContext? ActiveLoadingMovementContext { get; set; }
+
+    protected override MethodBase GetTargetMethod() =>
+        AccessTools.Method(ControllerType, "SetPlayerStateAsync", new[] { typeof(bool) })
+        ?? throw new MissingMethodException($"Could not find {ControllerTypeName}.SetPlayerStateAsync(bool).");
+
+    [PatchPrefix]
+    private static void Prefix(object __instance, [HarmonyArgument(0)] bool startAnim)
+    {
+        if (!startAnim)
+        {
+            return;
+        }
+
+        Player? player = PlayerField?.GetValue(__instance) as Player;
+        ActiveLoadingMovementContext = player?.MovementContext;
+    }
+
+    [PatchPostfix]
+    private static void Postfix([HarmonyArgument(0)] bool startAnim)
+    {
+        if (startAnim)
+        {
+            ActiveLoadingMovementContext = null;
+        }
+    }
+
+    internal static bool IsApplyingLoadAmmoSpeedLimit(MovementContext movementContext) =>
+        ReferenceEquals(ActiveLoadingMovementContext, movementContext);
+}
+
+internal sealed class ContinuousAmmoMovementSpeedPatch : ModulePatch
+{
+    protected override MethodBase GetTargetMethod() =>
+        AccessTools.Method(typeof(MovementContext), nameof(MovementContext.ChangeSpeedLimit),
+            new[] { typeof(float), typeof(Player.ESpeedLimit) })
+        ?? throw new MissingMethodException("Could not find MovementContext.ChangeSpeedLimit(float, ESpeedLimit).");
+
+    [PatchPrefix]
+    private static void Prefix(
+        MovementContext __instance,
+        [HarmonyArgument(0)] ref float speedLimit,
+        [HarmonyArgument(1)] Player.ESpeedLimit limitType)
+    {
+        if (!ContinuousLoadAmmoStartPatch.IsApplyingLoadAmmoSpeedLimit(__instance) ||
+            limitType.ToString() != "BarbedWire")
+        {
+            return;
+        }
+
+        SkillManager? skills = ClientAppUtils.GetClientApp()?.Session?.Profile?.Skills;
+        float maximumSpeed = __instance.MaxSpeed;
+        if (skills is null || maximumSpeed <= 0f)
+        {
+            return;
+        }
+
+        float bonusPerLevel = Plugin.ContinuousLoadAmmoMovementPercentPerLevel?.Value ?? 1f;
+        float bonusFraction = Math.Min(100f,
+            Math.Max(0, skills.MagDrills.Level) * bonusPerLevel) / 100f;
+        speedLimit = Math.Min(maximumSpeed, speedLimit + maximumSpeed * bonusFraction);
+    }
+}
+
 internal sealed class SkillEffectDisplayBuff : SkillManager.FloatBuff
 {
     internal string Description { get; }
@@ -541,13 +841,20 @@ internal static class SkillEffectDisplayRegistry
     {
         if (skill.Id == ESkillId.MagDrills)
         {
-            return CreateVisible(new[]
+            var buffs = new List<SkillEffectDisplayBuff>
             {
                 CreateBuff("Reduces magazine ergonomics penalty",
                     Plugin.GetMagazineErgonomicsReductionPercent(skill.Level), EBuffId.WeaponErgonomicsBuff),
                 CreateBuff("Reduces magazine recoil penalty",
                     Plugin.GetMagazineRecoilReductionPercent(skill.Level), EBuffId.MagDrillsUnloadSpeed)
-            });
+            };
+            if (Plugin.ContinuousLoadAmmoAvailable)
+            {
+                buffs.Add(CreateBuff("Increases movement speed while loading magazines",
+                    Plugin.GetContinuousLoadAmmoMovementBonusPercent(skill.Level), EBuffId.StrengthBuffSprintSpeedInc));
+            }
+
+            return CreateVisible(buffs.ToArray());
         }
 
         if (Plugin.SkillsExtendedAvailable && skill.Id == ESkillId.SilentOps && !skill.Locked)
@@ -567,6 +874,24 @@ internal static class SkillEffectDisplayRegistry
                     Plugin.GetSightErgonomicsReductionPercent(skill.Level), EBuffId.WeaponErgonomicsBuff),
                 CreateBuff("Reduces headgear ergonomics penalty",
                     Plugin.GetHeadgearErgonomicsReductionPercent(skill.Level), EBuffId.WeaponErgonomicsBuff)
+            });
+        }
+
+        if (skill.Id == ESkillId.Attention)
+        {
+            return CreateVisible(new[]
+            {
+                CreateBuff("Reduces objective planting time",
+                    Plugin.GetObjectivePlantTimeReductionPercent(skill.Level), EBuffId.AttentionLootSpeed)
+            });
+        }
+
+        if (skill.Id == ESkillId.Charisma)
+        {
+            return CreateVisible(new[]
+            {
+                CreateBuff("Reduces vehicle extraction time",
+                    Plugin.GetVehicleExtractionTimeReductionPercent(skill.Level), EBuffId.CharismaExfiltrationDiscount)
             });
         }
 
