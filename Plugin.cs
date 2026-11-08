@@ -24,7 +24,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     private const string PluginGuid = "com.musicmaniac.skilleffectsextended";
     private const string PluginName = "Skill Effects Extended";
-    private const string PluginVersion = "1.1.0";
+    private const string PluginVersion = "1.1.1";
     private const string SkillsExtendedGuid = "com.cj.skillsextended";
     private const string ContinuousLoadAmmoGuid = "com.ozen.continuousloadammo";
 
@@ -100,6 +100,7 @@ public sealed class Plugin : BaseUnityPlugin
             "Log the plant timer, Attention level, and reduction when a quest plant begins.");
 
         new ModErgonomicsPatch().Enable();
+        new WeaponModErgonomicsAggregationPatch().Enable();
         new ArmorComponentErgonomicsPatch().Enable();
         new ArmorPenaltyItemDisplayPatch().Enable();
         new MagazineRecoilPatch().Enable();
@@ -229,6 +230,31 @@ public sealed class Plugin : BaseUnityPlugin
         return SkillsExtendedAvailable && silentOps is not null && !silentOps.Locked;
     }
 
+    internal static float GetModErgonomicsReductionPercent(Mod mod, SkillManager skills)
+    {
+        if (mod is Magazine)
+        {
+            return GetMagazineErgonomicsReductionPercent(skills.MagDrills.Level);
+        }
+
+        if (mod is Silencer && TryGetSilentOps(skills, out Skill silentOps))
+        {
+            return GetSuppressorErgonomicsReductionPercent(silentOps.Level);
+        }
+
+        if (mod is SightMod)
+        {
+            return GetSightErgonomicsReductionPercent(skills.AimDrills.Level);
+        }
+
+        if (ArmorPenaltyReduction.IsHeadwearAttachment(mod))
+        {
+            return GetHeadgearErgonomicsReductionPercent(skills.AimDrills.Level);
+        }
+
+        return 0f;
+    }
+
     private static float GetReductionPercent(int level, float percentPerLevel)
     {
         return Math.Max(0f, Math.Min(100f, Math.Max(0, level) * percentPerLevel));
@@ -254,29 +280,43 @@ internal sealed class ModErgonomicsPatch : ModulePatch
             return;
         }
 
-        float reductionPercent;
-        if (__instance is Magazine)
-        {
-            reductionPercent = Plugin.GetMagazineErgonomicsReductionPercent(skills.MagDrills.Level);
-        }
-        else if (__instance is Silencer && Plugin.TryGetSilentOps(skills, out Skill silentOps))
-        {
-            reductionPercent = Plugin.GetSuppressorErgonomicsReductionPercent(silentOps.Level);
-        }
-        else if (__instance is SightMod)
-        {
-            reductionPercent = Plugin.GetSightErgonomicsReductionPercent(skills.AimDrills.Level);
-        }
-        else if (ArmorPenaltyReduction.IsHeadwearAttachment(__instance))
-        {
-            reductionPercent = Plugin.GetHeadgearErgonomicsReductionPercent(skills.AimDrills.Level);
-        }
-        else
+        float reductionPercent = Plugin.GetModErgonomicsReductionPercent(__instance, skills);
+        if (reductionPercent <= 0f)
         {
             return;
         }
 
         __result *= 1f - reductionPercent / 100f;
+    }
+}
+
+internal sealed class WeaponModErgonomicsAggregationPatch : ModulePatch
+{
+    protected override MethodBase GetTargetMethod() =>
+        AccessTools.PropertyGetter(typeof(Weapon), nameof(Weapon.ErgonomicsDelta));
+
+    [PatchPostfix]
+    private static void Postfix(Weapon __instance, ref float __result)
+    {
+        SkillManager? skills = ClientAppUtils.GetClientApp()?.Session?.Profile?.Skills;
+        if (skills is null)
+        {
+            return;
+        }
+
+        float weaponErgonomics = Math.Max(1f, __instance.Template.Ergonomics);
+        float recoveredErgonomics = 0f;
+        foreach (Mod mod in __instance.Mods)
+        {
+            float templateErgonomics = mod.Template.Ergonomics;
+            if (templateErgonomics < 0f)
+            {
+                float reductionPercent = Plugin.GetModErgonomicsReductionPercent(mod, skills);
+                recoveredErgonomics += -templateErgonomics * reductionPercent / 100f;
+            }
+        }
+
+        __result += recoveredErgonomics / weaponErgonomics;
     }
 }
 
