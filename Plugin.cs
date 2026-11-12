@@ -17,6 +17,9 @@ using UnityEngine;
 
 namespace SkillEffectsExtended;
 
+/// <summary>
+/// Configures skill effects and installs their gameplay and UI patches.
+/// </summary>
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 [BepInDependency(SkillsExtendedGuid, BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency(ContinuousLoadAmmoGuid, BepInDependency.DependencyFlags.SoftDependency)]
@@ -24,7 +27,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     private const string PluginGuid = "com.musicmaniac.skilleffectsextended";
     private const string PluginName = "Skill Effects Extended";
-    private const string PluginVersion = "1.1.1";
+    private const string PluginVersion = "1.1.2";
     private const string SkillsExtendedGuid = "com.cj.skillsextended";
     private const string ContinuousLoadAmmoGuid = "com.ozen.continuousloadammo";
 
@@ -46,7 +49,12 @@ public sealed class Plugin : BaseUnityPlugin
     internal static ConfigEntry<bool> LogObjectivePlantTimer = null!;
 
     private static Plugin? Instance { get; set; }
+    private static readonly Lazy<ConfigEntry<float>?> ContinuousLoadAmmoSpeedLimit =
+        new(ResolveContinuousLoadAmmoSpeedLimit);
 
+    /// <summary>
+    /// Binds configuration, detects optional dependencies, and enables gameplay and UI patches.
+    /// </summary>
     private void Awake()
     {
         Instance = this;
@@ -136,10 +144,16 @@ public sealed class Plugin : BaseUnityPlugin
             $"{VehicleExtractionTimePercentPerLevel.Value:0.##}% per Charisma level.");
     }
 
+    /// <summary>
+    /// Creates a per-level percentage setting constrained to zero through one hundred.
+    /// </summary>
     private ConfigEntry<float> BindReduction(string section, string key, float defaultValue, string description) =>
         Config.Bind(section, key, defaultValue,
             new ConfigDescription(description, new AcceptableValueRange<float>(0f, 100f)));
 
+    /// <summary>
+    /// Enables an optional UI patch and logs failures without stopping plugin startup.
+    /// </summary>
     private void TryEnableUiPatch(ModulePatch patch)
     {
         try
@@ -152,12 +166,21 @@ public sealed class Plugin : BaseUnityPlugin
         }
     }
 
+    /// <summary>
+    /// Calculates the Mag Drills reduction for magazine ergonomics penalties.
+    /// </summary>
     internal static float GetMagazineErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, MagazineErgonomicsPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Mag Drills reduction for magazine recoil penalties.
+    /// </summary>
     internal static float GetMagazineRecoilReductionPercent(int level) =>
         GetReductionPercent(level, MagazineRecoilPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Mag Drills movement bonus, capped by Continuous Load Ammo?s maximum speed.
+    /// </summary>
     internal static float GetContinuousLoadAmmoMovementBonusPercent(int level)
     {
         if (!ContinuousLoadAmmoAvailable)
@@ -165,57 +188,96 @@ public sealed class Plugin : BaseUnityPlugin
             return 0f;
         }
 
-        float baseSpeedLimit = 0.45f;
-        try
-        {
-            Type? continuousLoadAmmoType = AccessTools.TypeByName("ContinuousLoadAmmo.ContinuousLoadAmmo");
-            object? speedLimitEntry = AccessTools.Property(continuousLoadAmmoType, "SpeedLimit")?.GetValue(null);
-            if (speedLimitEntry is ConfigEntry<float> configEntry)
-            {
-                baseSpeedLimit = configEntry.Value;
-            }
-        }
-        catch (Exception exception)
-        {
-            Instance?.Logger.LogDebug($"Could not read Continuous Load Ammo speed limit; using its 45% default. {exception.Message}");
-        }
-
+        float baseSpeedLimit = ContinuousLoadAmmoSpeedLimit.Value?.Value ?? 0.45f;
         baseSpeedLimit = Math.Max(0f, Math.Min(1f, baseSpeedLimit));
         float bonusPerLevel = ContinuousLoadAmmoMovementPercentPerLevel?.Value ?? 1f;
         float addedSpeed = Math.Max(0, level) * bonusPerLevel / 100f;
         return Math.Max(0f, Math.Min(1f, baseSpeedLimit + addedSpeed) - baseSpeedLimit) * 100f;
     }
 
+    /// <summary>
+    /// Resolves the optional speed setting once; callers read its current value on each use.
+    /// </summary>
+    private static ConfigEntry<float>? ResolveContinuousLoadAmmoSpeedLimit()
+    {
+        try
+        {
+            Type? continuousLoadAmmoType = AccessTools.TypeByName("ContinuousLoadAmmo.ContinuousLoadAmmo");
+            return continuousLoadAmmoType?.GetProperty("SpeedLimit",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+                ?.GetValue(null) as ConfigEntry<float>;
+        }
+        catch (Exception exception)
+        {
+            Instance?.Logger.LogDebug($"Could not read Continuous Load Ammo speed limit; using its 45% default. {exception.Message}");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Calculates the Silent Ops reduction for suppressor ergonomics penalties.
+    /// </summary>
     internal static float GetSuppressorErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, SuppressorErgonomicsPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Aim Drills reduction for sight ergonomics penalties.
+    /// </summary>
     internal static float GetSightErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, SightErgonomicsPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Aim Drills reduction for headgear ergonomics penalties.
+    /// </summary>
     internal static float GetHeadgearErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, HeadgearErgonomicsPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Light Vests reduction for light armor ergonomics penalties.
+    /// </summary>
     internal static float GetLightArmorErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, LightArmorErgonomicsPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Heavy Vests reduction for heavy armor ergonomics penalties.
+    /// </summary>
     internal static float GetHeavyArmorErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, HeavyArmorErgonomicsPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Endurance reduction for backpack movement penalties.
+    /// </summary>
     internal static float GetBackpackMovementReductionPercent(int level) =>
         GetReductionPercent(level, BackpackMovementPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Strength reduction for backpack turn speed penalties.
+    /// </summary>
     internal static float GetBackpackTurnReductionPercent(int level) =>
         GetReductionPercent(level, BackpackTurnPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Strength reduction for backpack ergonomics penalties.
+    /// </summary>
     internal static float GetBackpackErgonomicsReductionPercent(int level) =>
         GetReductionPercent(level, BackpackErgonomicsPercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Attention reduction for objective planting time.
+    /// </summary>
     internal static float GetObjectivePlantTimeReductionPercent(int level) =>
         GetReductionPercent(level, ObjectivePlantTimePercentPerLevel.Value);
 
+    /// <summary>
+    /// Calculates the Charisma reduction for paid vehicle extraction time.
+    /// </summary>
     internal static float GetVehicleExtractionTimeReductionPercent(int level) =>
         GetReductionPercent(level, VehicleExtractionTimePercentPerLevel.Value);
 
+    /// <summary>
+    /// Writes objective planting diagnostics when the debug setting is enabled.
+    /// </summary>
     internal static void LogPlantTimerDebug(string message)
     {
         if (LogObjectivePlantTimer.Value)
@@ -224,12 +286,18 @@ public sealed class Plugin : BaseUnityPlugin
         }
     }
 
+    /// <summary>
+    /// Returns whether the optional Silent Ops skill is available and unlocked.
+    /// </summary>
     internal static bool TryGetSilentOps(SkillManager skills, out Skill silentOps)
     {
         silentOps = skills.SilentOps;
         return SkillsExtendedAvailable && silentOps is not null && !silentOps.Locked;
     }
 
+    /// <summary>
+    /// Selects the configured ergonomics reduction for a supported attachment.
+    /// </summary>
     internal static float GetModErgonomicsReductionPercent(Mod mod, SkillManager skills)
     {
         if (mod is Magazine)
@@ -255,17 +323,29 @@ public sealed class Plugin : BaseUnityPlugin
         return 0f;
     }
 
+    /// <summary>
+    /// Calculates the level-scaled reduction, clamped to the supported percentage range.
+    /// </summary>
     private static float GetReductionPercent(int level, float percentPerLevel)
     {
         return Math.Max(0f, Math.Min(100f, Math.Max(0, level) * percentPerLevel));
     }
 }
 
+/// <summary>
+/// Applies skill-based reductions to negative ergonomics values on supported weapon attachments.
+/// </summary>
 internal sealed class ModErgonomicsPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.PropertyGetter(typeof(Mod), nameof(Mod.Ergonomics));
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(Mod __instance, ref float __result)
     {
@@ -290,11 +370,20 @@ internal sealed class ModErgonomicsPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Adds recovered attachment ergonomics to the weapon-level ergonomics total.
+/// </summary>
 internal sealed class WeaponModErgonomicsAggregationPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.PropertyGetter(typeof(Weapon), nameof(Weapon.ErgonomicsDelta));
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(Weapon __instance, ref float __result)
     {
@@ -320,13 +409,28 @@ internal sealed class WeaponModErgonomicsAggregationPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Selects armor-related skill reductions and applies them to equipment ergonomics penalties.
+/// </summary>
 internal static class ArmorPenaltyReduction
 {
+    private const BindingFlags InstanceMemberFlags =
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+    private static readonly Dictionary<(Type Type, string Name), PropertyInfo?> PropertyCache = new();
+    private static readonly Dictionary<(Type Type, string Name), FieldInfo?> FieldCache = new();
+    private static readonly Dictionary<Type, ParentItemLookup> ParentItemLookups = new();
+
+    /// <summary>
+    /// Selects the skill-based ergonomics reduction applicable to the armor item.
+    /// </summary>
     internal static float GetErgonomicsPercent(ArmorComponent armor, SkillManager skills)
     {
         return GetErgonomicsPercent(armor.Item, armor.Template, armor.ArmorType, skills);
     }
 
+    /// <summary>
+    /// Selects the skill-based ergonomics reduction applicable to the armor item.
+    /// </summary>
     internal static float GetErgonomicsPercent(
         Item item,
         IEquipmentPenaltyComponentTemplate template,
@@ -348,6 +452,9 @@ internal static class ArmorPenaltyReduction
         };
     }
 
+    /// <summary>
+    /// Reduces an equipment item?s negative ergonomics penalty using its armor classification.
+    /// </summary>
     internal static float ReduceParentErgonomicsPenalty(
         float totalPenalty,
         Item item,
@@ -374,6 +481,9 @@ internal static class ArmorPenaltyReduction
         return totalPenalty - template.WeaponErgonomicPenalty * reductionPercent / 100f;
     }
 
+    /// <summary>
+    /// Finds armor classification from the item, its template, or its contained armor parts.
+    /// </summary>
     private static EArmorType GetSoftArmorType(
         Item item,
         EArmorType fallbackType,
@@ -385,7 +495,7 @@ internal static class ArmorPenaltyReduction
         }
 
         EArmorType templateType = ReadArmorType(template) ??
-            ReadArmorType(AccessTools.Property(item.GetType(), "Template")?.GetValue(item)) ??
+            ReadArmorType(GetPropertyValue(item, "Template")) ??
             EArmorType.None;
         if (templateType != EArmorType.None)
         {
@@ -404,6 +514,9 @@ internal static class ArmorPenaltyReduction
         return EArmorType.None;
     }
 
+    /// <summary>
+    /// Reads and parses armor classification from an object through reflection.
+    /// </summary>
     private static EArmorType? ReadArmorType(object? source)
     {
         if (source is null)
@@ -411,8 +524,7 @@ internal static class ArmorPenaltyReduction
             return null;
         }
 
-        object? value = AccessTools.Property(source.GetType(), "ArmorType")?.GetValue(source) ??
-            AccessTools.Field(source.GetType(), "ArmorType")?.GetValue(source);
+        object? value = GetPropertyValue(source, "ArmorType") ?? GetFieldValue(source, "ArmorType");
         if (value is EArmorType armorType)
         {
             return armorType;
@@ -423,6 +535,9 @@ internal static class ArmorPenaltyReduction
             : null;
     }
 
+    /// <summary>
+    /// Checks the parent chain to determine whether an item is attached to headwear.
+    /// </summary>
     internal static bool IsHeadwearAttachment(Item item)
     {
         object? current = item;
@@ -431,7 +546,7 @@ internal static class ArmorPenaltyReduction
             object? parent;
             try
             {
-                parent = AccessTools.Property(current.GetType(), "Parent")?.GetValue(current);
+                parent = GetPropertyValue(current, "Parent");
             }
             catch (TargetInvocationException)
             {
@@ -443,31 +558,7 @@ internal static class ArmorPenaltyReduction
                 return false;
             }
 
-            Item? parentItem = parent as Item ??
-                AccessTools.Property(parent.GetType(), "Item")?.GetValue(parent) as Item ??
-                AccessTools.Property(parent.GetType(), "ParentItem")?.GetValue(parent) as Item ??
-                AccessTools.Field(parent.GetType(), "ParentItem")?.GetValue(parent) as Item;
-            if (parentItem is null)
-            {
-                object? slot = AccessTools.Field(parent.GetType(), "Slot")?.GetValue(parent);
-                parentItem = slot is null
-                    ? null
-                    : AccessTools.Property(slot.GetType(), "ParentItem")?.GetValue(slot) as Item;
-            }
-            if (parentItem is null)
-            {
-                object? grid = AccessTools.Field(parent.GetType(), "Grid")?.GetValue(parent);
-                parentItem = grid is null
-                    ? null
-                    : AccessTools.Property(grid.GetType(), "ParentItem")?.GetValue(grid) as Item;
-            }
-            if (parentItem is null)
-            {
-                object? container = AccessTools.Field(parent.GetType(), "Container")?.GetValue(parent);
-                parentItem = container is null
-                    ? null
-                    : AccessTools.Property(container.GetType(), "Item")?.GetValue(container) as Item;
-            }
+            Item? parentItem = GetParentItem(parent);
             if (parentItem is null)
             {
                 return false;
@@ -483,13 +574,179 @@ internal static class ArmorPenaltyReduction
 
         return false;
     }
+
+    /// <summary>
+    /// Uses the cached lookup strategy for an address type to read its current parent item.
+    /// </summary>
+    private static Item? GetParentItem(object parent)
+    {
+        if (parent is Item item)
+        {
+            return item;
+        }
+
+        Type type = parent.GetType();
+        ParentItemLookup lookup;
+        lock (ParentItemLookups)
+        {
+            if (!ParentItemLookups.TryGetValue(type, out lookup))
+            {
+                lookup = new ParentItemLookup(type);
+                ParentItemLookups.Add(type, lookup);
+            }
+        }
+
+        return lookup.Resolve(parent);
+    }
+
+    /// <summary>
+    /// Stores available address members, preserving fallback order without caching item relationships.
+    /// </summary>
+    private sealed class ParentItemLookup
+    {
+        private readonly PropertyInfo? _item;
+        private readonly PropertyInfo? _parentItemProperty;
+        private readonly FieldInfo? _parentItemField;
+        private readonly FieldInfo? _slot;
+        private readonly FieldInfo? _grid;
+        private readonly FieldInfo? _container;
+
+        /// <summary>
+        /// Resolves the supported parent members once for this address type.
+        /// </summary>
+        internal ParentItemLookup(Type type)
+        {
+            _item = FindProperty(type, "Item");
+            _parentItemProperty = FindProperty(type, "ParentItem");
+            _parentItemField = FindField(type, "ParentItem");
+            _slot = FindField(type, "Slot");
+            _grid = FindField(type, "Grid");
+            _container = FindField(type, "Container");
+        }
+
+        /// <summary>
+        /// Reads live member values in their original order, including fallbacks for null values.
+        /// </summary>
+        internal Item? Resolve(object parent)
+        {
+            Item? item = _item?.GetValue(parent) as Item ??
+                _parentItemProperty?.GetValue(parent) as Item ??
+                _parentItemField?.GetValue(parent) as Item;
+            if (item is not null)
+            {
+                return item;
+            }
+
+            object? slot = _slot?.GetValue(parent);
+            item = slot is null ? null : GetPropertyValue(slot, "ParentItem") as Item;
+            if (item is not null)
+            {
+                return item;
+            }
+
+            object? grid = _grid?.GetValue(parent);
+            item = grid is null ? null : GetPropertyValue(grid, "ParentItem") as Item;
+            if (item is not null)
+            {
+                return item;
+            }
+
+            object? container = _container?.GetValue(parent);
+            return container is null ? null : GetPropertyValue(container, "Item") as Item;
+        }
+    }
+
+    /// <summary>
+    /// Reads a cached property value using quiet reflection.
+    /// </summary>
+    private static object? GetPropertyValue(object instance, string name)
+    {
+        Type type = instance.GetType();
+        var key = (type, name);
+        PropertyInfo? property;
+        lock (PropertyCache)
+        {
+            if (!PropertyCache.TryGetValue(key, out property))
+            {
+                property = FindProperty(type, name);
+                PropertyCache.Add(key, property);
+            }
+        }
+
+        return property?.GetValue(instance);
+    }
+
+    /// <summary>
+    /// Reads a cached field value using quiet reflection.
+    /// </summary>
+    private static object? GetFieldValue(object instance, string name)
+    {
+        Type type = instance.GetType();
+        var key = (type, name);
+        FieldInfo? field;
+        lock (FieldCache)
+        {
+            if (!FieldCache.TryGetValue(key, out field))
+            {
+                field = FindField(type, name);
+                FieldCache.Add(key, field);
+            }
+        }
+
+        return field?.GetValue(instance);
+    }
+
+    /// <summary>
+    /// Searches a type and its base types for an instance property.
+    /// </summary>
+    private static PropertyInfo? FindProperty(Type type, string name)
+    {
+        for (Type? current = type; current is not null; current = current.BaseType)
+        {
+            foreach (PropertyInfo property in current.GetProperties(InstanceMemberFlags))
+            {
+                if (property.Name == name && property.GetIndexParameters().Length == 0)
+                {
+                    return property;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Searches a type and its base types for an instance field.
+    /// </summary>
+    private static FieldInfo? FindField(Type type, string name)
+    {
+        for (Type? current = type; current is not null; current = current.BaseType)
+        {
+            FieldInfo? field = current.GetField(name, InstanceMemberFlags);
+            if (field is not null)
+            {
+                return field;
+            }
+        }
+
+        return null;
+    }
 }
 
+/// <summary>
+/// Applies armor skill reductions to armor component ergonomics penalties.
+/// </summary>
 internal sealed class ArmorComponentErgonomicsPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.PropertyGetter(typeof(ArmorComponent), nameof(ArmorComponent.WeaponErgonomicPenalty));
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(ArmorComponent __instance, ref float __result)
     {
@@ -509,14 +766,23 @@ internal sealed class ArmorComponentErgonomicsPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Updates displayed equipment ergonomics penalties to reflect armor skill reductions.
+/// </summary>
 internal sealed class ArmorPenaltyItemDisplayPatch : ModulePatch
 {
     private static readonly ConditionalWeakTable<ItemAttribute, object> WrappedAttributes = new();
 
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Constructor(typeof(EquipmentPenaltyComponent),
             new[] { typeof(Item), typeof(IEquipmentPenaltyComponentTemplate), typeof(bool) });
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(object[] __args)
     {
@@ -543,12 +809,21 @@ internal sealed class ArmorPenaltyItemDisplayPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Reduces backpack movement speed penalties using Endurance.
+/// </summary>
 internal sealed class BackpackMovementPenaltyPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(typeof(BackpackTemplate),
             "EFT.InventoryLogic.IEquipmentPenaltyComponentTemplate.get_SpeedPenaltyPercent");
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(ref float __result)
     {
@@ -568,12 +843,21 @@ internal sealed class BackpackMovementPenaltyPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Reduces backpack turn speed penalties using Strength.
+/// </summary>
 internal sealed class BackpackTurnPenaltyPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(typeof(BackpackTemplate),
             "EFT.InventoryLogic.IEquipmentPenaltyComponentTemplate.get_MousePenalty");
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(ref float __result)
     {
@@ -593,12 +877,21 @@ internal sealed class BackpackTurnPenaltyPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Reduces backpack ergonomics penalties using Strength.
+/// </summary>
 internal sealed class BackpackErgonomicsPenaltyPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(typeof(BackpackTemplate),
             "EFT.InventoryLogic.IEquipmentPenaltyComponentTemplate.get_WeaponErgonomicPenalty");
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(ref float __result)
     {
@@ -618,8 +911,14 @@ internal sealed class BackpackErgonomicsPenaltyPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Reduces quest objective setup time using Attention.
+/// </summary>
 internal sealed class ObjectivePlantTimePatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Constructor(typeof(SetupItemOperation), new[]
         {
@@ -633,6 +932,9 @@ internal sealed class ObjectivePlantTimePatch : ModulePatch
             typeof(float)
         });
 
+    /// <summary>
+    /// Adjusts or records arguments before the targeted game method runs.
+    /// </summary>
     [PatchPrefix]
     private static void Prefix([HarmonyArgument("setupTime")] ref float setupTime)
     {
@@ -652,10 +954,16 @@ internal sealed class ObjectivePlantTimePatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Reduces quest item placement time using Attention.
+/// </summary>
 internal sealed class ObjectivePlantActionTimePatch : ModulePatch
 {
     private sealed class OriginalPlantTime
     {
+        /// <summary>
+        /// Stores the original quest placement duration.
+        /// </summary>
         internal OriginalPlantTime(float value) => Value = value;
         internal float Value { get; }
     }
@@ -671,10 +979,16 @@ internal sealed class ObjectivePlantActionTimePatch : ModulePatch
     private static readonly FieldInfo? PlantTimeField =
         AccessTools.Field(typeof(ConditionLeaveItemAtLocation), "plantTime");
 
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(PlacementActionType, "method_0")
         ?? throw new MissingMethodException("Could not find the quest item placement action callback.");
 
+    /// <summary>
+    /// Adjusts or records arguments before the targeted game method runs.
+    /// </summary>
     [PatchPrefix]
     private static void Prefix(object __instance)
     {
@@ -711,14 +1025,23 @@ internal sealed class ObjectivePlantActionTimePatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Reduces paid vehicle extraction timers using Charisma.
+/// </summary>
 internal sealed class VehicleExtractionTimePatch : ModulePatch
 {
     private static readonly ConditionalWeakTable<EFT.Interactive.ExfiltrationPoint, OriginalExtractionTime>
         OriginalTimes = new();
 
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(typeof(EFT.Interactive.ExfiltrationPoint), nameof(EFT.Interactive.ExfiltrationPoint.Proceed));
 
+    /// <summary>
+    /// Adjusts or records arguments before the targeted game method runs.
+    /// </summary>
     [PatchPrefix]
     private static void Prefix(EFT.Interactive.ExfiltrationPoint __instance, Player player)
     {
@@ -740,6 +1063,9 @@ internal sealed class VehicleExtractionTimePatch : ModulePatch
         settings.ExfiltrationTime = original.Seconds * (1f - reductionPercent / 100f);
     }
 
+    /// <summary>
+    /// Determines whether the extraction point uses a paid vehicle transfer requirement.
+    /// </summary>
     private static bool IsPaidVehicleExtraction(EFT.Interactive.ExfiltrationPoint point)
     {
         if (point.Settings?.ExfiltrationType != EFT.Interactive.EExfiltrationType.SharedTimer ||
@@ -761,17 +1087,29 @@ internal sealed class VehicleExtractionTimePatch : ModulePatch
 
     private sealed class OriginalExtractionTime
     {
+        /// <summary>
+        /// Stores the original vehicle extraction duration.
+        /// </summary>
         internal OriginalExtractionTime(float seconds) => Seconds = seconds;
 
         internal float Seconds { get; }
     }
 }
 
+/// <summary>
+/// Reduces positive magazine recoil penalties using Mag Drills.
+/// </summary>
 internal sealed class MagazineRecoilPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.PropertyGetter(typeof(Mod), nameof(Mod.Recoil));
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(Mod __instance, ref float __result)
     {
@@ -791,6 +1129,9 @@ internal sealed class MagazineRecoilPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Tracks whether Continuous Load Ammo is starting or ending a magazine load.
+/// </summary>
 internal sealed class ContinuousLoadAmmoStartPatch : ModulePatch
 {
     private const string ControllerTypeName = "ContinuousLoadAmmo.Controllers.LoadAmmoController";
@@ -799,10 +1140,16 @@ internal sealed class ContinuousLoadAmmoStartPatch : ModulePatch
         ControllerType is null ? null : AccessTools.Field(ControllerType, "_player");
     private static MovementContext? ActiveLoadingMovementContext { get; set; }
 
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(ControllerType, "SetPlayerStateAsync", new[] { typeof(bool) })
         ?? throw new MissingMethodException($"Could not find {ControllerTypeName}.SetPlayerStateAsync(bool).");
 
+    /// <summary>
+    /// Adjusts or records arguments before the targeted game method runs.
+    /// </summary>
     [PatchPrefix]
     private static void Prefix(object __instance, [HarmonyArgument(0)] bool startAnim)
     {
@@ -815,6 +1162,9 @@ internal sealed class ContinuousLoadAmmoStartPatch : ModulePatch
         ActiveLoadingMovementContext = player?.MovementContext;
     }
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix([HarmonyArgument(0)] bool startAnim)
     {
@@ -824,17 +1174,29 @@ internal sealed class ContinuousLoadAmmoStartPatch : ModulePatch
         }
     }
 
+    /// <summary>
+    /// Checks whether the movement context belongs to an active magazine loading action.
+    /// </summary>
     internal static bool IsApplyingLoadAmmoSpeedLimit(MovementContext movementContext) =>
         ReferenceEquals(ActiveLoadingMovementContext, movementContext);
 }
 
+/// <summary>
+/// Raises the movement speed limit while Continuous Load Ammo is loading a magazine.
+/// </summary>
 internal sealed class ContinuousAmmoMovementSpeedPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(typeof(MovementContext), nameof(MovementContext.ChangeSpeedLimit),
             new[] { typeof(float), typeof(Player.ESpeedLimit) })
         ?? throw new MissingMethodException("Could not find MovementContext.ChangeSpeedLimit(float, ESpeedLimit).");
 
+    /// <summary>
+    /// Adjusts or records arguments before the targeted game method runs.
+    /// </summary>
     [PatchPrefix]
     private static void Prefix(
         MovementContext __instance,
@@ -861,6 +1223,9 @@ internal sealed class ContinuousAmmoMovementSpeedPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Represents one skill effect for the game skill UI.
+/// </summary>
 internal sealed class SkillEffectDisplayBuff : SkillManager.FloatBuff
 {
     internal string Description { get; }
@@ -875,8 +1240,14 @@ internal sealed class SkillEffectDisplayBuff : SkillManager.FloatBuff
     }
 }
 
+/// <summary>
+/// Builds configured effect descriptions shown for each supported skill.
+/// </summary>
 internal static class SkillEffectDisplayRegistry
 {
+    /// <summary>
+    /// Creates the active effect descriptions for the supplied skill.
+    /// </summary>
     internal static SkillEffectDisplayBuff[] Create(Skill skill)
     {
         if (skill.Id == ESkillId.MagDrills)
@@ -976,9 +1347,15 @@ internal static class SkillEffectDisplayRegistry
         return Array.Empty<SkillEffectDisplayBuff>();
     }
 
+    /// <summary>
+    /// Creates a UI representation for one skill effect.
+    /// </summary>
     private static SkillEffectDisplayBuff CreateBuff(string description, float value, EBuffId iconId) =>
         new(description, value, iconId);
 
+    /// <summary>
+    /// Filters out effects whose configured value is zero.
+    /// </summary>
     private static SkillEffectDisplayBuff[] CreateVisible(SkillEffectDisplayBuff[] buffs)
     {
         var visibleBuffs = new List<SkillEffectDisplayBuff>(buffs.Length);
@@ -994,16 +1371,25 @@ internal static class SkillEffectDisplayRegistry
     }
 }
 
+/// <summary>
+/// Displays skill effect icons on the skill list panels.
+/// </summary>
 internal sealed class SkillPanelBuffsPatch : ModulePatch
 {
     private static readonly FieldInfo IconTemplateField = AccessTools.Field(typeof(SkillPanel), "_buffIconTemplate");
     private static readonly FieldInfo IconContainerField = AccessTools.Field(typeof(SkillPanel), "_buffsContainer");
     private static readonly ConditionalWeakTable<SkillPanel, BuffIconGroup> IconGroups = new();
 
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(typeof(SkillPanel), nameof(SkillPanel.Show),
             new[] { typeof(Skill), typeof(EFT.HealthSystem.IHealthController) });
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(Skill skill, SkillPanel __instance)
     {
@@ -1020,6 +1406,9 @@ internal sealed class SkillPanelBuffsPatch : ModulePatch
         IconGroups.GetValue(__instance, CreateIconGroup).Show(skill, buffs);
     }
 
+    /// <summary>
+    /// Creates the icon group associated with a skill panel.
+    /// </summary>
     private static BuffIconGroup CreateIconGroup(SkillPanel panel) =>
         new((BuffIcon)IconTemplateField.GetValue(panel), (Transform)IconContainerField.GetValue(panel));
 
@@ -1029,12 +1418,18 @@ internal sealed class SkillPanelBuffsPatch : ModulePatch
         private readonly Transform _container;
         private readonly List<BuffIcon> _icons = new();
 
+        /// <summary>
+        /// Initializes the reusable icon group for a skill panel.
+        /// </summary>
         internal BuffIconGroup(BuffIcon template, Transform container)
         {
             _template = template;
             _container = container;
         }
 
+        /// <summary>
+        /// Updates and displays UI elements for the supplied skill effects.
+        /// </summary>
         internal void Show(Skill skill, IReadOnlyList<SkillEffectDisplayBuff> buffs)
         {
             EnsureCount(buffs.Count);
@@ -1046,8 +1441,14 @@ internal sealed class SkillPanelBuffsPatch : ModulePatch
             HideFrom(buffs.Count);
         }
 
+        /// <summary>
+        /// Hides every UI element managed by this group.
+        /// </summary>
         internal void HideAll() => HideFrom(0);
 
+        /// <summary>
+        /// Creates UI elements until the group can display the requested number of effects.
+        /// </summary>
         private void EnsureCount(int count)
         {
             while (_icons.Count < count)
@@ -1056,6 +1457,9 @@ internal sealed class SkillPanelBuffsPatch : ModulePatch
             }
         }
 
+        /// <summary>
+        /// Hides managed UI elements starting at the supplied index.
+        /// </summary>
         private void HideFrom(int firstHiddenIndex)
         {
             for (int index = firstHiddenIndex; index < _icons.Count; index++)
@@ -1066,15 +1470,24 @@ internal sealed class SkillPanelBuffsPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Displays skill effect rows in skill detail tooltips.
+/// </summary>
 internal sealed class SkillTooltipBuffsPatch : ModulePatch
 {
     private static readonly FieldInfo PanelTemplateField = AccessTools.Field(typeof(SkillTooltip), "_buffPanelTemplate");
     private static readonly FieldInfo PanelContainerField = AccessTools.Field(typeof(SkillTooltip), "_buffContainer");
     private static readonly ConditionalWeakTable<SkillTooltip, BuffPanelGroup> PanelGroups = new();
 
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(typeof(SkillTooltip), nameof(SkillTooltip.Show), new[] { typeof(Skill) });
 
+    /// <summary>
+    /// Adjusts the original game result after the targeted method runs.
+    /// </summary>
     [PatchPostfix]
     private static void Postfix(Skill skill, SkillTooltip __instance)
     {
@@ -1091,6 +1504,9 @@ internal sealed class SkillTooltipBuffsPatch : ModulePatch
         PanelGroups.GetValue(__instance, CreatePanelGroup).Show(skill, buffs);
     }
 
+    /// <summary>
+    /// Creates the effect panel group associated with a skill tooltip.
+    /// </summary>
     private static BuffPanelGroup CreatePanelGroup(SkillTooltip tooltip) =>
         new((BuffPanel)PanelTemplateField.GetValue(tooltip), (Transform)PanelContainerField.GetValue(tooltip));
 
@@ -1100,12 +1516,18 @@ internal sealed class SkillTooltipBuffsPatch : ModulePatch
         private readonly Transform _container;
         private readonly List<BuffPanel> _panels = new();
 
+        /// <summary>
+        /// Initializes the reusable effect panel group for a skill tooltip.
+        /// </summary>
         internal BuffPanelGroup(BuffPanel template, Transform container)
         {
             _template = template;
             _container = container;
         }
 
+        /// <summary>
+        /// Updates and displays UI elements for the supplied skill effects.
+        /// </summary>
         internal void Show(Skill skill, IReadOnlyList<SkillEffectDisplayBuff> buffs)
         {
             EnsureCount(buffs.Count);
@@ -1120,8 +1542,14 @@ internal sealed class SkillTooltipBuffsPatch : ModulePatch
             HideFrom(buffs.Count);
         }
 
+        /// <summary>
+        /// Hides every UI element managed by this group.
+        /// </summary>
         internal void HideAll() => HideFrom(0);
 
+        /// <summary>
+        /// Creates UI elements until the group can display the requested number of effects.
+        /// </summary>
         private void EnsureCount(int count)
         {
             while (_panels.Count < count)
@@ -1130,6 +1558,9 @@ internal sealed class SkillTooltipBuffsPatch : ModulePatch
             }
         }
 
+        /// <summary>
+        /// Hides managed UI elements starting at the supplied index.
+        /// </summary>
         private void HideFrom(int firstHiddenIndex)
         {
             for (int index = firstHiddenIndex; index < _panels.Count; index++)
@@ -1140,12 +1571,21 @@ internal sealed class SkillTooltipBuffsPatch : ModulePatch
     }
 }
 
+/// <summary>
+/// Provides readable descriptions for custom skill effect icons.
+/// </summary>
 internal sealed class BuffDescriptionPatch : ModulePatch
 {
+    /// <summary>
+    /// Resolves the game method or property accessor targeted by this patch.
+    /// </summary>
     protected override MethodBase GetTargetMethod() =>
         AccessTools.Method(typeof(BuffIcon), nameof(BuffIcon.GetBuffDescription),
             new[] { typeof(SkillManager.Buff) });
 
+    /// <summary>
+    /// Adjusts or records arguments before the targeted game method runs.
+    /// </summary>
     [PatchPrefix]
     private static bool Prefix(SkillManager.Buff buff, ref string __result)
     {
